@@ -19,6 +19,7 @@ pub struct ThenConcurrent<St, Fut: Future, F> {
     #[pin]
     futures: FuturesUnordered<Fut>,
     fun: F,
+    limit: Option<usize>,
 }
 
 impl<St, Fut, F, T> Stream for ThenConcurrent<St, Fut, F>
@@ -34,6 +35,7 @@ where
             mut stream,
             mut futures,
             fun,
+            limit,
         } = self.project();
 
         // Eagerly fetch all ready items from the stream
@@ -41,6 +43,10 @@ where
             match stream.as_mut().poll_next(cx) {
                 Poll::Ready(Some(n)) => {
                     futures.push(fun(n));
+                    if limit.as_ref().is_some_and(|l| futures.len() >= *l) {
+                        // Go to process existing futures, before pulling new ones from the Stream
+                        break;
+                    }
                 }
                 Poll::Ready(None) => {
                     if futures.is_empty() {
@@ -68,24 +74,27 @@ pub trait StreamThenConcurrentExt: Stream {
     /// This function is similar to [`futures::stream::StreamExt::then`], but the
     /// stream is polled concurrently with the futures returned by `f`. An unbounded number of
     /// futures corresponding to past stream values is kept via `FuturesUnordered`.
-    fn then_concurrent<Fut, F>(self, f: F) -> ThenConcurrent<Self, Fut, F>
-    where
-        Self: Sized,
-        Fut: Future,
-        F: FnMut(Self::Item) -> Fut;
-}
-
-impl<S: Stream> StreamThenConcurrentExt for S {
-    fn then_concurrent<Fut, F>(self, f: F) -> ThenConcurrent<Self, Fut, F>
+    fn then_concurrent<Fut, F, L>(self, f: F, limit: L) -> ThenConcurrent<Self, Fut, F>
     where
         Self: Sized,
         Fut: Future,
         F: FnMut(Self::Item) -> Fut,
+        L: Into<Option<usize>>;
+}
+
+impl<S: Stream> StreamThenConcurrentExt for S {
+    fn then_concurrent<Fut, F, L>(self, f: F, limit: L) -> ThenConcurrent<Self, Fut, F>
+    where
+        Self: Sized,
+        Fut: Future,
+        F: FnMut(Self::Item) -> Fut,
+        L: Into<Option<usize>>,
     {
         ThenConcurrent {
             stream: self,
             futures: FuturesUnordered::new(),
             fun: f,
+            limit: limit.into(),
         }
     }
 }
@@ -95,16 +104,16 @@ mod tests {
     use super::*;
     use futures::{channel::mpsc::unbounded, StreamExt};
 
-    #[async_std::test]
+    #[tokio::test]
     async fn no_items() {
         let stream = futures::stream::iter::<Vec<u64>>(vec![]).then_concurrent(|_| async move {
             panic!("must not be called");
-        });
+        }, None);
 
         assert_eq!(stream.collect::<Vec<_>>().await, vec![]);
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn paused_stream() {
         let (mut tx, rx) = unbounded::<u64>();
 
@@ -112,10 +121,10 @@ mod tests {
             if x == 0 {
                 x
             } else {
-                async_std::task::sleep(std::time::Duration::from_millis(x)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(x)).await;
                 x
             }
-        });
+        }, None);
 
         // we need to poll the stream such that FuturesUnordered gets empty
         let first_item = stream.next();
@@ -132,7 +141,7 @@ mod tests {
         assert_eq!(second_item.await, Some(5));
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn fast_items() {
         let item_1 = 0u64;
         let item_2 = 0u64;
@@ -143,16 +152,16 @@ mod tests {
                 if x == 0 {
                     x
                 } else {
-                    async_std::task::sleep(std::time::Duration::from_millis(x)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(x)).await;
                     x
                 }
-            });
+            }, None);
         let actual_packets = stream.collect::<Vec<u64>>().await;
 
         assert_eq!(actual_packets, vec![0, 0, 7]);
     }
 
-    #[async_std::test]
+    #[tokio::test]
     async fn reorder_items() {
         let item_1 = 10u64; // 3rd in the output
         let item_2 = 5u64; // 1st in the output
@@ -160,9 +169,9 @@ mod tests {
 
         let stream =
             futures::stream::iter(vec![item_1, item_2, item_3]).then_concurrent(|x| async move {
-                async_std::task::sleep(std::time::Duration::from_millis(x)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(x)).await;
                 x
-            });
+            }, None);
         let actual_packets = stream.collect::<Vec<u64>>().await;
 
         assert_eq!(actual_packets, vec![5, 7, 10]);

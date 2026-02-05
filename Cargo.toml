@@ -1,7 +1,7 @@
 [package]
 name = "rust-stream-ext-concurrent"
 description = "Concurrent behavior extensions for any futures::stream::Stream objects"
-version = "1.0.0"
+version = "2.0.0"
 authors = ["HOPR Association <tech@hoprnet.org>"]
 edition = "2021"
 license = "MIT"
@@ -12,10 +12,9 @@ readme = "README.md"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-futures = "0.3.28"
-pin-project = "1.0.12"
+futures = "0.3.31"
+pin-project = "1.1.10"
 
 [dev-dependencies]
-async-std = { version = "1.12.0", features = ["attributes"] }
-more-asserts = "0.3.1"
-env_logger = "0.10.0"
+tokio = { version = "1.49.0", features = ["full"] }
+
