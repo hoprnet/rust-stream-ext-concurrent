@@ -38,27 +38,30 @@ where
             limit,
         } = self.project();
 
-        // Eagerly fetch all ready items from the stream
-        loop {
-            match stream.as_mut().poll_next(cx) {
-                Poll::Ready(Some(n)) => {
-                    futures.push(fun(n));
-                    if limit.as_ref().is_some_and(|l| futures.len() >= *l) {
+        // Eagerly fetch all ready items from the stream if not full already
+        if limit.as_ref().is_none_or(|&l| futures.len() < l) {
+            loop {
+                match stream.as_mut().poll_next(cx) {
+                    Poll::Ready(Some(n)) => {
+                        futures.push(fun(n));
                         // Go to process existing futures, before pulling new ones from the Stream
+                        // when full
+                        if limit.as_ref().is_some_and(|&l| futures.len() >= l) {
+                            break;
+                        }
+                    }
+                    Poll::Ready(None) => {
+                        if futures.is_empty() {
+                            return Poll::Ready(None);
+                        }
                         break;
                     }
-                }
-                Poll::Ready(None) => {
-                    if futures.is_empty() {
-                        return Poll::Ready(None);
+                    Poll::Pending => {
+                        if futures.is_empty() {
+                            return Poll::Pending;
+                        }
+                        break;
                     }
-                    break;
-                }
-                Poll::Pending => {
-                    if futures.is_empty() {
-                        return Poll::Pending;
-                    }
-                    break;
                 }
             }
         }
