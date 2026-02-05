@@ -97,7 +97,7 @@ impl<S: Stream> StreamThenConcurrentExt for S {
             stream: self,
             futures: FuturesUnordered::new(),
             fun: f,
-            limit: limit.into(),
+            limit: limit.into().filter(|&l| l > 0),
         }
     }
 }
